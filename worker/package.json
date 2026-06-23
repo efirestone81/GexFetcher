@@ -1,0 +1,16 @@
+{
+  "name": "ff-gex-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "wrangler": "^3.78.0",
+    "vitest": "^1.6.0",
+    "@cloudflare/workers-types": "^4.20240725.0"
+  }
+}

@@ -1,0 +1,14 @@
+name = "ff-gex"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Bind a KV namespace. Create it with:
+#   wrangler kv namespace create GEX_KV
+# Then paste the returned id below.
+[[kv_namespaces]]
+binding = "GEX_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Secrets (set via `wrangler secret put`):
+#   WORKER_SECRET — shared with GitHub Actions for POST /update
+#   READ_API_KEY  — shared with NinjaTrader indicator for GET /gex
