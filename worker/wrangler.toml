@@ -8,8 +8,8 @@ compatibility_date = "2025-01-01"
 #   wrangler kv namespace create GEX_KV
 # Then paste the returned id below.
 [[kv_namespaces]]
-binding = "GEX_KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+binding = "gex_kv_namespace"
+id = "d8cee0576bf94c908a621a0949be09d3"
 
 # Secrets (set via `wrangler secret put`):
 #   WORKER_SECRET — shared with GitHub Actions for POST /update
