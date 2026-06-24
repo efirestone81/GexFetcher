@@ -122,7 +122,7 @@ async def test_python_to_worker_full_path(fake_worker):
     assert got["schema_version"] == 2
     assert got["fetch_run_id"] == "IT-1"
     assert "SPY" in got["tickers"]
-    assert got["tickers"]["SPY"]["call_wall"]["etf_strike"] == 590.0
+    assert got["tickers"]["SPY"]["blended"]["call_wall"]["etf_strike"] == 590.0
     assert got["tickers"]["SPY"]["spot"] == 583.42
 
 

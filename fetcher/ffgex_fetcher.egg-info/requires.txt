@@ -1,0 +1,7 @@
+httpx<0.28,>=0.27
+numpy<2.0,>=1.26
+scipy<2.0,>=1.13
+
+[dev]
+pytest<9.0,>=8.0
+pytest-asyncio<1.0,>=0.23

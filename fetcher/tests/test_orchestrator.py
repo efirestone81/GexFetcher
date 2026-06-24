@@ -42,10 +42,10 @@ async def test_process_ticker_end_to_end(chain):
     assert result["spot"] == 583.42
     assert result["futures_symbol"] == "ES"
     assert 9.5 < result["multiplier"] < 10.5
-    assert result["call_wall"]["etf_strike"] == 590.0
-    assert result["put_wall"]["etf_strike"] == 575.0
-    assert result["gamma_flip"] is not None
-    assert 575 < result["gamma_flip"]["etf_strike"] < 590
+    assert result["blended"]["call_wall"]["etf_strike"] == 590.0
+    assert result["blended"]["put_wall"]["etf_strike"] == 575.0
+    assert result["blended"]["gamma_flip"] is not None
+    assert 575 < result["blended"]["gamma_flip"]["etf_strike"] < 590
     assert result["contract_count"] > 100
     assert isinstance(result["expiries_included"], list)
     assert len(result["expiries_included"]) > 1
@@ -87,4 +87,4 @@ async def test_full_payload_roundtrip(chain):
     back = json.loads(blob)
     assert back["schema_version"] == 2
     assert back["tickers"]["SPY"]["status"] == "ok"
-    assert back["tickers"]["SPY"]["call_wall"]["etf_strike"] == 590.0
+    assert back["tickers"]["SPY"]["blended"]["call_wall"]["etf_strike"] == 590.0
