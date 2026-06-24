@@ -18,7 +18,7 @@
  *   - Cache-Control max-age=60 lets the CF edge serve repeats for free
  */
 
-const ALLOWED_TICKERS = new Set(["SPX", "NDX", "IWM", "DIA", "GLD", "USO"]);
+const ALLOWED_TICKERS = new Set(["SPX", "NDX","SPY", "QQQ", "IWM", "DIA", "GLD", "USO"]);
 
 const json = (obj, init = {}) =>
   new Response(JSON.stringify(obj), {
