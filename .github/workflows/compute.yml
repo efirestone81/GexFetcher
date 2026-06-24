@@ -1,17 +1,23 @@
 name: Compute GEX
 
 on:
-  # Best-effort cron schedule. GHA cron can be delayed 5-15 min under peak load,
-  # which is fine for GEX since OI is stale intraday anyway.
+  # Schedule is UTC. US equity options trade 09:30-16:00 ET.
+  # We run a post-open snapshot first (0DTE focus), then midday and pre-close.
+  # Because GitHub cron is UTC and does not track DST, each ET target is listed
+  # twice: once for EDT (summer, UTC-4) and once for EST (winter, UTC-5).
+  # The workflow self-guards against running on the wrong offset using a date
+  # check in the first step, so the duplicate crons don't double-fire.
   schedule:
-    # UTC times. Markets open 13:30 UTC (09:30 ET) during DST.
-    # NOTE: cron is interpreted in UTC; ET-time drifts by 1h between DST and EST.
-    - cron: '35 13 * * 1-5'    # 09:35 ET (DST) / 08:35 EST — post-open
-    - cron: '0 16 * * 1-5'     # 12:00 ET (DST) / 11:00 EST — midday
-    - cron: '55 19 * * 1-5'    # 15:55 ET (DST) / 14:55 EST — pre-close
-    - cron: '0 7 * * 2-6'      # 02:00 ET — overnight after OCC posts final OI
+    # ---- Post-open (~9:40 ET, shortly after open so 0DTE data is populated) ----
+    - cron: '40 13 * * 1-5'   # 09:40 ET during EDT (summer)
+    - cron: '40 14 * * 1-5'   # 09:40 ET during EST (winter)
+    # ---- Midday (~12:00 ET) ----
+    - cron: '0 16 * * 1-5'    # 12:00 ET during EDT
+    - cron: '0 17 * * 1-5'    # 12:00 ET during EST
+    # ---- Pre-close (~15:50 ET) ----
+    - cron: '50 19 * * 1-5'   # 15:50 ET during EDT
+    - cron: '50 20 * * 1-5'   # 15:50 ET during EST
 
-  # Manual trigger button in the Actions UI.
   workflow_dispatch:
     inputs:
       tickers:
@@ -24,7 +30,6 @@ on:
         required: false
         default: false
 
-# Prevent overlapping runs.
 concurrency:
   group: compute-gex
   cancel-in-progress: false
@@ -33,16 +38,49 @@ jobs:
   compute:
     runs-on: ubuntu-latest
     timeout-minutes: 8
-
     defaults:
       run:
         working-directory: fetcher
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Guard against wrong DST offset
+        id: dstguard
+        shell: bash
+        run: |
+          # Determine whether the US is currently observing EDT or EST.
+          # If 'America/New_York' offset is -04 it's EDT, -05 it's EST.
+          OFFSET=$(TZ=America/New_York date +%z)   # e.g. -0400 or -0500
+          HOUR_UTC=$(date -u +%H)
+          MIN_UTC=$(date -u +%M)
+          echo "ET offset: $OFFSET, now UTC: ${HOUR_UTC}:${MIN_UTC}"
+          # Map each run window. EDT crons are at UTC 13:40/16:00/19:50.
+          # EST crons are at UTC 14:40/17:00/20:50.
+          # If we're on EDT but this invocation matches an EST cron hour, skip.
+          SKIP=0
+          if [ "$OFFSET" = "-0400" ]; then
+            # EDT active: valid UTC hours are 13,16,19. Skip 14,17,20.
+            case "$HOUR_UTC" in
+              14|17|20) SKIP=1 ;;
+            esac
+          elif [ "$OFFSET" = "-0500" ]; then
+            # EST active: valid UTC hours are 14,17,20. Skip 13,16,19.
+            case "$HOUR_UTC" in
+              13|16|19) SKIP=1 ;;
+            esac
+          fi
+          # workflow_dispatch (manual) always runs.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SKIP=0
+          fi
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          if [ "$SKIP" = "1" ]; then
+            echo "Skipping: this cron is for the other DST offset."
+          fi
+
       - name: Setup Python
+        if: steps.dstguard.outputs.skip != '1'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -50,15 +88,17 @@ jobs:
           cache-dependency-path: fetcher/pyproject.toml
 
       - name: Install package
+        if: steps.dstguard.outputs.skip != '1'
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run quick test suite (math correctness gate)
-        # If math is broken, do not push bad data to the Worker.
-        run: python -m pytest -q tests/test_greeks.py tests/test_gex_engine.py tests/test_futures_mapper.py tests/test_output.py
+      - name: Run math correctness gate
+        if: steps.dstguard.outputs.skip != '1'
+        run: python -m pytest -q tests/test_greeks.py tests/test_gex_engine.py tests/test_futures_mapper.py tests/test_output.py tests/test_0dte.py
 
       - name: Compute and POST GEX
+        if: steps.dstguard.outputs.skip != '1'
         env:
           WORKER_URL: ${{ secrets.WORKER_URL }}
           WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
@@ -67,17 +107,12 @@ jobs:
           LOG_LEVEL: INFO
         run: python -m ffgex_fetcher
 
-      - name: Healthcheck Worker (after POST)
-        if: ${{ github.event.inputs.dry_run != 'true' }}
+      - name: Healthcheck Worker
+        if: ${{ steps.dstguard.outputs.skip != '1' && github.event.inputs.dry_run != 'true' }}
         env:
           WORKER_URL: ${{ secrets.WORKER_URL }}
         run: |
-          # Confirm the Worker now reports recent data.
           status_url="${WORKER_URL%/}/health"
-          echo "GET $status_url"
           curl -sS --fail --max-time 10 "$status_url" | tee /tmp/health.json
-          age=$(python -c "import json; print(json.load(open('/tmp/health.json')).get('age_minutes', 999))")
-          echo "Worker reports age=${age}m"
-          if [ "$age" -gt 5 ]; then
-            echo "::warning::Worker age is ${age}m — POST may not have taken effect"
-          fi
+          age=$(python -c "import json;print(json.load(open('/tmp/health.json')).get('age_minutes',999))")
+          echo "Worker age=${age}m"

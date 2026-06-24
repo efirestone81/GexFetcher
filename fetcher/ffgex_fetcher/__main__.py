@@ -1,18 +1,15 @@
 """
-Orchestrator — ties together fetch, parse, compute, map, and POST.
+Orchestrator — fetch, parse, compute blended + 0DTE levels, map, POST.
 
 Run with: python -m ffgex_fetcher
 
-Environment variables:
-  WORKER_URL       — Cloudflare Worker base URL (required for POST)
-  WORKER_SECRET    — Shared secret for /update endpoint (required for POST)
-  RISK_FREE_RATE   — Override SOFR (default 0.043)
-  TICKERS          — Comma-separated subset (default: all DEFAULT_TICKERS)
-  MAX_DTE          — Max days-to-expiry filter (default 30)
-  DRY_RUN          — If set, skip the POST and write payload to stdout
-  LOG_LEVEL        — DEBUG | INFO | WARNING | ERROR (default INFO)
-"""
+Key env vars: WORKER_URL, WORKER_SECRET, RISK_FREE_RATE, TICKERS, MAX_DTE,
+DRY_RUN, LOG_LEVEL.
 
+For SPX/NDX (index underlyings), the indicator applies LiveBasis at draw time,
+but we still ship multiplier + carry mappings for compatibility and for the
+ETF tickers.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -26,10 +23,12 @@ from typing import Any
 from ffgex_fetcher.chain_fetcher import fetch_all_chains
 from ffgex_fetcher.gex_engine import (
     parse_chain,
+    select_0dte_contracts,
     compute_gex_by_strike,
     compute_oi_by_strike,
     find_gamma_flip,
     identify_walls_clusters,
+    compute_expected_move_1d,
 )
 from ffgex_fetcher.futures_mapper import (
     DEFAULT_TICKERS,
@@ -38,8 +37,12 @@ from ffgex_fetcher.futures_mapper import (
 )
 from ffgex_fetcher.output import build_payload, build_ticker_payload, post_to_worker
 
-
 log = logging.getLogger("ffgex_fetcher")
+
+# Approximate days-to-futures-expiry for the carry-basis calc. Index futures
+# (ES/NQ) are quarterly; mid-quarter the active contract averages ~45 DTE.
+# This only affects the futures_basis mapping, not the levels themselves.
+CARRY_T_YEARS = 45.0 / 365.0
 
 
 def _configure_logging():
@@ -50,43 +53,23 @@ def _configure_logging():
         datefmt="%Y-%m-%dT%H:%M:%SZ",
         stream=sys.stdout,
     )
-    logging.Formatter.converter = lambda *_: datetime.now(timezone.utc).timetuple()
 
 
-def _validate_levels(ticker: str, spot: float, walls: dict, flip: float | None) -> list[str]:
-    """Return a list of human-readable warning strings if levels look off."""
-    warnings: list[str] = []
-
+def _validate(name, spot, walls, flip):
+    w = []
     if walls["call_wall"] is None:
-        warnings.append(f"{ticker}: no positive GEX found (no call wall)")
+        w.append(f"{name}: no positive GEX (no call wall)")
     if walls["put_wall"] is None:
-        warnings.append(f"{ticker}: no negative GEX found (no put wall)")
-    if walls["call_wall"] and walls["put_wall"]:
-        if walls["call_wall"]["strike"] == walls["put_wall"]["strike"]:
-            warnings.append(f"{ticker}: call wall and put wall at same strike — chain may be degenerate")
-
-    if flip is None:
-        warnings.append(f"{ticker}: no gamma flip in sweep range")
-    elif abs(flip - spot) / spot > 0.05:
-        warnings.append(
-            f"{ticker}: flip {flip:.2f} is >5% from spot {spot:.2f}"
-        )
-
-    return warnings
+        w.append(f"{name}: no negative GEX (no put wall)")
+    if flip is not None and spot and abs(flip - spot) / spot > 0.05:
+        w.append(f"{name}: flip {flip:.2f} >5% from spot {spot:.2f}")
+    return w
 
 
-async def process_ticker(
-    ticker: str,
-    chain_or_exc: dict | Exception,
-    risk_free_rate: float,
-    max_dte: int,
-    now_utc: datetime | None = None,
-) -> dict[str, Any]:
-    """Run the full per-ticker pipeline. Always returns a dict (status=ok or error)."""
+async def process_ticker(ticker, chain_or_exc, risk_free_rate, max_dte, now_utc=None):
     cfg = DEFAULT_TICKERS.get(ticker)
     if cfg is None:
         return {"status": "error", "warnings": [f"{ticker}: no configured TickerConfig"]}
-
     if isinstance(chain_or_exc, Exception):
         return {"status": "error", "warnings": [f"{ticker}: fetch failed: {chain_or_exc}"]}
 
@@ -96,83 +79,97 @@ async def process_ticker(
         return {"status": "error", "warnings": [f"{ticker}: parse failed: {e}"]}
 
     if not contracts:
-        return {
-            "status": "error",
-            "warnings": [f"{ticker}: chain had {len(chain_or_exc.get('data',{}).get('options',[]))} raw options, "
-                         f"0 survived filtering — possibly stale, all 0DTE, or bad IV/OI data"],
-        }
+        return {"status": "error",
+                "warnings": [f"{ticker}: 0 contracts survived filtering (stale/empty chain)"]}
 
-    gex_map = compute_gex_by_strike(spot, contracts, r=risk_free_rate, q=cfg.dividend_yield)
-    oi_map = compute_oi_by_strike(contracts)
-    walls = identify_walls_clusters(gex_map, oi_map, top_n_clusters=5, top_n_oi=5)
-    flip = find_gamma_flip(spot, contracts, r=risk_free_rate, q=cfg.dividend_yield)
+    q = cfg.dividend_yield
 
+    # --- Blended levels (all expiries <= max_dte) ---
+    blended_gex = compute_gex_by_strike(spot, contracts, r=risk_free_rate, q=q)
+    blended_oi = compute_oi_by_strike(contracts)
+    blended_walls = identify_walls_clusters(blended_gex, blended_oi, top_n_clusters=5, top_n_oi=5)
+    blended_flip = find_gamma_flip(spot, contracts, r=risk_free_rate, q=q)
+
+    # --- 0DTE levels (strict same-day expiry, Option A) ---
+    dte0_contracts = select_0dte_contracts(contracts, now_utc=now_utc)
+    if dte0_contracts:
+        dte0_gex = compute_gex_by_strike(spot, dte0_contracts, r=risk_free_rate, q=q)
+        dte0_oi = compute_oi_by_strike(dte0_contracts)
+        dte0_walls = identify_walls_clusters(dte0_gex, dte0_oi, top_n_clusters=5, top_n_oi=0)
+        dte0_flip = find_gamma_flip(spot, dte0_contracts, r=risk_free_rate, q=q)
+    else:
+        dte0_walls = {"call_wall": None, "put_wall": None, "top_pos_clusters": [],
+                      "top_neg_clusters": [], "top_oi_clusters": [], "total_net_gex": 0.0}
+        dte0_flip = None
+
+    # --- 1D expected move (from 0DTE ATM IV if available, else nearest) ---
+    em_source = dte0_contracts if dte0_contracts else contracts
+    expected_move, atm_iv = compute_expected_move_1d(spot, em_source)
+
+    # --- Futures mapping ---
     multiplier, mult_warnings = compute_multiplier(spot, cfg)
-    # Use a representative 1-month T for carry basis; production can refresh.
-    basis_carry = compute_carry_basis(spot, risk_free_rate, cfg, T_years=0.083)
+    basis_carry = compute_carry_basis(spot, risk_free_rate, cfg, CARRY_T_YEARS)
 
-    expiries_set = sorted({c.expiry_utc.date().isoformat() for c in contracts})
-    sanity_warnings = _validate_levels(ticker, spot, walls, flip)
+    expiries = sorted({c.expiry_utc.date().isoformat() for c in contracts})
+    warnings = mult_warnings + _validate(ticker, spot, blended_walls, blended_flip)
 
     log.info(
-        "%s spot=%.2f mult=%.4f CW=%s PW=%s flip=%s contracts=%d",
+        "%s spot=%.2f mult=%.4f | blended CW=%s PW=%s flip=%s | 0DTE n=%d CW=%s PW=%s flip=%s",
         ticker, spot, multiplier,
-        f"{walls['call_wall']['strike']:.2f}" if walls['call_wall'] else "—",
-        f"{walls['put_wall']['strike']:.2f}" if walls['put_wall'] else "—",
-        f"{flip:.2f}" if flip else "—",
-        len(contracts),
+        _fmt(blended_walls["call_wall"]), _fmt(blended_walls["put_wall"]),
+        f"{blended_flip:.2f}" if blended_flip else "—",
+        len(dte0_contracts),
+        _fmt(dte0_walls["call_wall"]), _fmt(dte0_walls["put_wall"]),
+        f"{dte0_flip:.2f}" if dte0_flip else "—",
     )
 
     return build_ticker_payload(
-        status="ok",
-        spot=spot,
-        cfg=cfg,
-        multiplier=multiplier,
-        basis_carry=basis_carry,
-        walls=walls,
-        flip=flip,
-        contract_count=len(contracts),
-        expiries_included=expiries_set,
-        warnings=mult_warnings + sanity_warnings,
+        status="ok", spot=spot, cfg=cfg, multiplier=multiplier, basis_carry=basis_carry,
+        blended_walls=blended_walls, blended_flip=blended_flip,
+        dte0_walls=dte0_walls, dte0_flip=dte0_flip, dte0_contract_count=len(dte0_contracts),
+        expected_move=expected_move, atm_iv=atm_iv,
+        contract_count=len(contracts), expiries_included=expiries, warnings=warnings,
     )
 
 
-async def main_async() -> int:
-    _configure_logging()
+def _fmt(wall):
+    return f"{wall['strike']:.2f}" if wall else "—"
 
+
+async def main_async():
+    _configure_logging()
     worker_url = os.environ.get("WORKER_URL")
     worker_secret = os.environ.get("WORKER_SECRET")
     dry_run = bool(os.environ.get("DRY_RUN"))
     risk_free_rate = float(os.environ.get("RISK_FREE_RATE", "0.043"))
     max_dte = int(os.environ.get("MAX_DTE", "30"))
-
     ticker_csv = os.environ.get("TICKERS")
-    tickers = (
-        [t.strip().upper() for t in ticker_csv.split(",")]
-        if ticker_csv else list(DEFAULT_TICKERS.keys())
-    )
+    tickers = ([t.strip().upper() for t in ticker_csv.split(",")]
+               if ticker_csv else list(DEFAULT_TICKERS.keys()))
 
-    if not dry_run:
-        if not worker_url or not worker_secret:
-            log.error("WORKER_URL and WORKER_SECRET required (or set DRY_RUN=1)")
-            return 2
+    if not dry_run and (not worker_url or not worker_secret):
+        log.error("WORKER_URL and WORKER_SECRET required (or set DRY_RUN=1)")
+        return 2
 
-    log.info("Fetching %s", ", ".join(tickers))
-    chains = await fetch_all_chains(tickers)
+    # Map ticker key -> CBOE symbol for fetching
+    symbols = {DEFAULT_TICKERS[t].symbol: t for t in tickers if t in DEFAULT_TICKERS}
+    log.info("Fetching %s", ", ".join(symbols.keys()))
+    chains_by_symbol = await fetch_all_chains(list(symbols.keys()))
+    # Re-key results back to ticker names
+    chains = {symbols[sym]: data for sym, data in chains_by_symbol.items()}
 
     per_ticker: dict[str, dict] = {}
     for t in tickers:
         per_ticker[t] = await process_ticker(t, chains.get(t), risk_free_rate, max_dte)
 
-    # If every ticker errored, fail loudly — do NOT overwrite Worker state.
-    ok_count = sum(1 for v in per_ticker.values() if v.get("status") == "ok")
-    if ok_count == 0:
-        log.error("All %d tickers failed; aborting POST to preserve last good payload", len(tickers))
+    ok = sum(1 for v in per_ticker.values() if v.get("status") == "ok")
+    if ok == 0:
+        log.error("All %d tickers failed; aborting POST", len(tickers))
         return 1
 
-    fetch_run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    payload = build_payload(per_ticker, risk_free_rate=risk_free_rate, fetch_run_id=fetch_run_id)
-    log.info("Built payload: %d/%d tickers ok, run=%s", ok_count, len(tickers), fetch_run_id)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    payload = build_payload(per_ticker, risk_free_rate=risk_free_rate, fetch_run_id=run_id)
+    log.info("Built payload: %d/%d ok, run=%s", ok, len(tickers), run_id)
 
     if dry_run:
         json.dump(payload, sys.stdout, indent=2)
@@ -184,7 +181,7 @@ async def main_async() -> int:
     return 0
 
 
-def main() -> int:
+def main():
     return asyncio.run(main_async())
 
 
