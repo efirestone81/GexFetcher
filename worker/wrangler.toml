@@ -7,8 +7,11 @@ compatibility_date = "2025-01-01"
 # Bind a KV namespace. Create it with:
 #   wrangler kv namespace create GEX_KV
 # Then paste the returned id below.
+# NOTE: `binding` is the property name on `env` in src/index.js — it MUST be
+# exactly GEX_KV (the code reads env.GEX_KV). Renaming it breaks /update with
+# "Cannot read properties of undefined (reading 'put')".
 [[kv_namespaces]]
-binding = "gex_kv_namespace"
+binding = "GEX_KV"
 id = "d8cee0576bf94c908a621a0949be09d3"
 
 # Secrets (set via `wrangler secret put`):
