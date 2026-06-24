@@ -1,4 +1,6 @@
-name = "ff-gex"
+# worker/wrangler.toml
+name = 'gex-fetcher'
+
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
