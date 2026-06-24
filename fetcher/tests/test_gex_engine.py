@@ -50,7 +50,7 @@ REF_NOW = datetime(2026, 5, 23, 14, 0, tzinfo=timezone.utc)
 def test_parse_occ_spy_call():
     result = parse_occ_symbol("SPY240419C00450000")
     assert result is not None
-    strike, expiry, is_call = result
+    _, expiry, is_call, strike = result
     assert strike == 450.000
     assert is_call is True
     assert expiry == datetime(2024, 4, 19, 20, 0, tzinfo=timezone.utc)
@@ -59,7 +59,7 @@ def test_parse_occ_spy_call():
 def test_parse_occ_qqq_put_fractional_strike():
     result = parse_occ_symbol("QQQ240517P00380500")
     assert result is not None
-    strike, expiry, is_call = result
+    _, expiry, is_call, strike = result
     assert strike == 380.500
     assert is_call is False
 
@@ -67,7 +67,7 @@ def test_parse_occ_qqq_put_fractional_strike():
 def test_parse_occ_spx_index():
     result = parse_occ_symbol("SPX240419C05000000")
     assert result is not None
-    strike, _, is_call = result
+    _, _, is_call, strike = result
     assert strike == 5000.000
     assert is_call is True
 
@@ -76,7 +76,7 @@ def test_parse_occ_high_strike():
     """NDX strikes go to 5 digits before decimal."""
     result = parse_occ_symbol("NDX240419C20000000")
     assert result is not None
-    strike, _, _ = result
+    _, _, _, strike = result
     assert strike == 20000.000
 
 

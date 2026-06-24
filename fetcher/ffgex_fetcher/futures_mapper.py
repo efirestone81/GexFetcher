@@ -68,10 +68,13 @@ DEFAULT_TICKERS: dict[str, TickerConfig] = {
 
     # --- ETF proxies, available but NOT fetched by default ---
     # ES/NQ now source from SPX/NDX (above). SPY/QQQ remain configured so they
-    # can be requested explicitly (TICKERS=SPY) and so the SPY-based live
-    # integration test resolves a config. They use scale=10 (SPY≈SPX/10).
-    "SPY": TickerConfig("SPY", "ES",  7425.0, 10.0, (9.5, 10.7),  0.0125, display_name="SPY"),
-    "QQQ": TickerConfig("QQQ", "NQ", 29441.0, 40.0, (39.0, 43.0), 0.0070, display_name="QQQ"),
+    # can be requested explicitly (TICKERS=SPY) and so the SPY-based tests
+    # (live integration + synthetic fixtures) resolve a config. Because they
+    # are NOT in DEFAULT_FETCH_TICKERS, their futures_ref_price is calibration
+    # for the test fixtures only and has no production effect. Kept at the
+    # original values the synthetic fixtures were built against.
+    "SPY": TickerConfig("SPY", "ES",  5800.0, 10.0, (9.5, 10.5),  0.0125, display_name="SPY"),
+    "QQQ": TickerConfig("QQQ", "NQ", 20000.0, 40.0, (39.0, 43.0), 0.0070, display_name="QQQ"),
 }
 
 # The tickers fetched when no explicit TICKERS env var is given. SPY/QQQ are in

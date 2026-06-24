@@ -85,6 +85,6 @@ async def test_full_payload_roundtrip(chain):
     assert len(blob) > 1000
     # Round-trip
     back = json.loads(blob)
-    assert back["schema_version"] == 1
+    assert back["schema_version"] == 2
     assert back["tickers"]["SPY"]["status"] == "ok"
     assert back["tickers"]["SPY"]["call_wall"]["etf_strike"] == 590.0
