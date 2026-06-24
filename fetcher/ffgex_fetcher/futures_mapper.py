@@ -25,58 +25,85 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class TickerConfig:
-    symbol: str               # CBOE CDN symbol, e.g. "_SPX", "_NDX", "SPY"
+    # NOTE: the first six fields preserve the original positional order so that
+    # existing call sites/tests using positional args keep working:
+    #   TickerConfig(etf_symbol, futures_symbol, futures_ref_price,
+    #                scale_to_index, multiplier_bounds, dividend_yield)
+    etf_symbol: str           # underlying ticker, e.g. "SPY", "_SPX"
     futures_symbol: str       # e.g. "ES"
     futures_ref_price: float  # last known front-month futures price
     scale_to_index: float     # 1.0 for index, ~10/40 for ETFs
     multiplier_bounds: tuple[float, float]
     dividend_yield: float
-    display_name: str         # human label, e.g. "SPX"
+    # New optional fields (added for SPX/NDX). Default to etf_symbol so older
+    # 6-arg construction still works.
+    cboe_symbol: str = ""     # CBOE CDN symbol; defaults to etf_symbol if blank
+    display_name: str = ""    # human label; defaults to etf_symbol if blank
+
+    @property
+    def symbol(self) -> str:
+        """CBOE CDN fetch symbol (e.g. '_SPX'). Falls back to etf_symbol."""
+        return self.cboe_symbol or self.etf_symbol
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.etf_symbol
 
 
-# v1 config. ES and NQ now source from the cash INDEX (SPX, NDX) — the same
-# underlying the futures track — for maximum accuracy. The other four stay on
-# ETF proxies since there is no equally clean cash-index option chain for them.
-#
-# Index underlyings use the CBOE underscore-prefixed symbol (_SPX, _NDX) and
-# scale_to_index = 1.0.
+# ES and NQ source from the cash INDEX (SPX, NDX) — the same underlying the
+# futures track — for maximum accuracy. The other four stay on ETF proxies.
+# Index underlyings use the CBOE underscore-prefixed symbol (_SPX, _NDX),
+# passed as the cboe_symbol, with scale_to_index = 1.0.
 DEFAULT_TICKERS: dict[str, TickerConfig] = {
     # --- INDEX-sourced (primary instruments) ---
-    "SPX": TickerConfig("_SPX", "ES", 7425.0, 1.0, (0.97, 1.03), 0.0125, "SPX"),
-    "NDX": TickerConfig("_NDX", "NQ", 29441.0, 1.0, (0.97, 1.03), 0.0070, "NDX"),
+    # etf_symbol here doubles as the key's identity; cboe_symbol is the fetch URL symbol.
+    "SPX": TickerConfig("SPX", "ES", 7425.0, 1.0, (0.97, 1.03), 0.0125, cboe_symbol="_SPX", display_name="SPX"),
+    "NDX": TickerConfig("NDX", "NQ", 29441.0, 1.0, (0.97, 1.03), 0.0070, cboe_symbol="_NDX", display_name="NDX"),
 
     # --- ETF-sourced (secondary instruments) ---
-    "IWM": TickerConfig("IWM", "RTY", 2980.0, 10.0,  (9.5, 10.7),  0.0135, "IWM"),
-    "DIA": TickerConfig("DIA", "YM", 47000.0, 90.0,  (87.0, 92.0), 0.0160, "DIA"),
-    "GLD": TickerConfig("GLD", "GC",  4006.0, 11.0,  (10.5, 11.5), 0.0,    "GLD"),
-    "USO": TickerConfig("USO", "CL",    77.0, 0.72,  (0.65, 0.80), 0.0,    "USO"),
+    "IWM": TickerConfig("IWM", "RTY", 2980.0, 10.0,  (9.5, 10.7),  0.0135),
+    "DIA": TickerConfig("DIA", "YM", 47000.0, 90.0,  (87.0, 92.0), 0.0160),
+    "GLD": TickerConfig("GLD", "GC",  4006.0, 11.0,  (10.5, 11.5), 0.0),
+    "USO": TickerConfig("USO", "CL",    77.0, 0.72,  (0.65, 0.80), 0.0),
+
+    # --- ETF proxies, available but NOT fetched by default ---
+    # ES/NQ now source from SPX/NDX (above). SPY/QQQ remain configured so they
+    # can be requested explicitly (TICKERS=SPY) and so the SPY-based live
+    # integration test resolves a config. They use scale=10 (SPY≈SPX/10).
+    "SPY": TickerConfig("SPY", "ES",  7425.0, 10.0, (9.5, 10.7),  0.0125, display_name="SPY"),
+    "QQQ": TickerConfig("QQQ", "NQ", 29441.0, 40.0, (39.0, 43.0), 0.0070, display_name="QQQ"),
 }
 
+# The tickers fetched when no explicit TICKERS env var is given. SPY/QQQ are in
+# DEFAULT_TICKERS for config/lookup but intentionally excluded from the default
+# fetch set, since ES/NQ are served by SPX/NDX.
+DEFAULT_FETCH_TICKERS = ["SPX", "NDX", "IWM", "DIA", "GLD", "USO"]
 
-def compute_multiplier(underlying_spot, cfg):
-    if underlying_spot <= 0:
-        return 1.0, [f"{cfg.display_name}: invalid spot ({underlying_spot})"]
-    multiplier = cfg.futures_ref_price / underlying_spot
+
+def compute_multiplier(etf_spot, cfg):
+    if etf_spot <= 0:
+        return 1.0, [f"{cfg.label}: invalid spot ({etf_spot})"]
+    multiplier = cfg.futures_ref_price / etf_spot
     warnings = []
     lo, hi = cfg.multiplier_bounds
     if not (lo <= multiplier <= hi):
         warnings.append(
-            f"{cfg.display_name}: multiplier {multiplier:.4f} outside bounds "
+            f"{cfg.label}: multiplier {multiplier:.4f} outside bounds "
             f"[{lo}, {hi}] — update futures_ref_price (currently {cfg.futures_ref_price})"
         )
     return multiplier, warnings
 
 
-def compute_carry_basis(underlying_spot, r, cfg, T_years):
-    if underlying_spot <= 0 or T_years <= 0:
+def compute_carry_basis(etf_spot, r, cfg, T_years):
+    if etf_spot <= 0 or T_years <= 0:
         return 0.0
     net_carry = r - cfg.dividend_yield
-    return underlying_spot * (math.exp(net_carry * T_years) - 1.0) * cfg.scale_to_index
+    return etf_spot * (math.exp(net_carry * T_years) - 1.0) * cfg.scale_to_index
 
 
-def map_strike(strike, multiplier, basis_carry, cfg):
+def map_strike(etf_strike, multiplier, basis_carry, cfg):
     return {
-        "etf_strike": float(strike),    # kept as key name for schema compat (= underlying strike)
-        "futures_mult": float(strike * multiplier),
-        "futures_basis": float(strike * cfg.scale_to_index + basis_carry),
+        "etf_strike": float(etf_strike),    # underlying strike (index or ETF)
+        "futures_mult": float(etf_strike * multiplier),
+        "futures_basis": float(etf_strike * cfg.scale_to_index + basis_carry),
     }

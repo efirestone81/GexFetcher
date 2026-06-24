@@ -1,13 +1,16 @@
 """
-Unit tests for output.py.
+Unit tests for output.py (schema v2: blended + dte0 + expected_move).
 
 Covers:
-1. build_ticker_payload produces correct schema for "ok" tickers.
-2. build_ticker_payload produces error variant for failed tickers.
-3. build_payload top-level wrapper.
-4. post_to_worker — mock httpx and verify headers/URL/retry behavior.
+1. build_ticker_payload produces correct v2 schema for "ok" tickers.
+2. Both blended and dte0 level sets are mapped correctly.
+3. dte0 is None when there's no same-day expiry (dte0_contract_count=0).
+4. expected_move_1d block.
+5. MenthorQ-style 0DTE aliases.
+6. Error variant.
+7. build_payload envelope + JSON serializability.
+8. post_to_worker — mocked httpx, auth/retry behavior.
 """
-
 import json
 from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock
@@ -15,231 +18,203 @@ from unittest.mock import patch, AsyncMock
 import pytest
 import httpx
 
-from ffgex_fetcher.output import build_ticker_payload, build_payload, post_to_worker, SCHEMA_VERSION
+from ffgex_fetcher.output import (
+    build_ticker_payload, build_payload, post_to_worker, SCHEMA_VERSION,
+)
 from ffgex_fetcher.futures_mapper import DEFAULT_TICKERS
 
 
-# ---------------------------------------------------------------------------
-# build_ticker_payload
-# ---------------------------------------------------------------------------
-
-def _sample_walls():
+def _walls(cw_strike=7500.0, pw_strike=7000.0):
     return {
-        "call_wall": {"strike": 590.0, "gex_dollars": 2.69e9},
-        "put_wall": {"strike": 575.0, "gex_dollars": -1.60e9},
+        "call_wall": {"strike": cw_strike, "gex_dollars": 2.69e9},
+        "put_wall": {"strike": pw_strike, "gex_dollars": -1.60e9},
         "top_pos_clusters": [
-            {"strike": 584.0, "gex_dollars": 0.03e9},
-            {"strike": 582.0, "gex_dollars": 0.03e9},
+            {"strike": cw_strike + 10, "gex_dollars": 0.03e9},
+            {"strike": cw_strike + 20, "gex_dollars": 0.02e9},
         ],
         "top_neg_clusters": [
-            {"strike": 585.0, "gex_dollars": -0.02e9},
+            {"strike": pw_strike - 10, "gex_dollars": -0.02e9},
         ],
         "top_oi_clusters": [
-            {"strike": 590.0, "open_interest": 473057},
-            {"strike": 575.0, "open_interest": 435619},
+            {"strike": cw_strike, "open_interest": 47305},
         ],
         "total_net_gex": 1.06e9,
     }
 
 
-def test_ticker_payload_ok_full_schema():
-    cfg = DEFAULT_TICKERS["SPY"]
-    out = build_ticker_payload(
-        status="ok",
-        spot=583.42,
-        cfg=cfg,
-        multiplier=9.9414,
-        basis_carry=14.79,
-        walls=_sample_walls(),
-        flip=582.15,
-        contract_count=714,
-        expiries_included=["2026-05-23", "2026-05-30"],
+def _common_kwargs(**overrides):
+    cfg = DEFAULT_TICKERS["SPX"]
+    base = dict(
+        status="ok", spot=7361.0, cfg=cfg, multiplier=1.0087, basis_carry=56.0,
+        blended_walls=_walls(7500, 7000), blended_flip=7445.0,
+        dte0_walls=_walls(7380, 7325), dte0_flip=7350.0, dte0_contract_count=210,
+        expected_move=55.0, atm_iv=0.12,
+        contract_count=2674, expiries_included=["2026-06-24", "2026-06-26"],
         warnings=[],
     )
-
-    # Required top-level keys
-    expected_keys = {
-        "status", "spot", "dividend_yield", "futures_symbol", "multiplier",
-        "spot_futures_equiv", "basis_carry", "gamma_flip", "call_wall",
-        "put_wall", "top_pos_clusters", "top_neg_clusters", "top_oi_clusters",
-        "total_net_gex", "contract_count", "expiries_included", "warnings",
-    }
-    assert set(out.keys()) == expected_keys
-    assert out["status"] == "ok"
-    assert out["spot"] == 583.42
-    assert out["futures_symbol"] == "ES"
-    assert out["multiplier"] == 9.9414
-
-    # Flip carries all three mapping fields
-    assert set(out["gamma_flip"].keys()) == {"etf_strike", "futures_mult", "futures_basis"}
-    assert out["gamma_flip"]["etf_strike"] == 582.15
-    assert out["gamma_flip"]["futures_mult"] == pytest.approx(582.15 * 9.9414)
-    assert out["gamma_flip"]["futures_basis"] == pytest.approx(582.15 * 10.0 + 14.79)
-
-    # Wall payloads carry mapping + dollars
-    assert set(out["call_wall"].keys()) == {"etf_strike", "futures_mult", "futures_basis", "gex_dollars"}
-    assert out["call_wall"]["etf_strike"] == 590.0
-    assert out["call_wall"]["gex_dollars"] == 2.69e9
-
-    # Clusters preserve count
-    assert len(out["top_pos_clusters"]) == 2
-    assert len(out["top_neg_clusters"]) == 1
-    assert len(out["top_oi_clusters"]) == 2
-
-
-def test_ticker_payload_error_minimal():
-    out = build_ticker_payload(
-        status="error",
-        spot=None,
-        cfg=DEFAULT_TICKERS["SPY"],
-        multiplier=1.0,
-        basis_carry=0.0,
-        walls={},
-        flip=None,
-        contract_count=0,
-        expiries_included=[],
-        warnings=["fetch failed: timeout"],
-    )
-    assert out == {"status": "error", "warnings": ["fetch failed: timeout"]}
-
-
-def test_ticker_payload_missing_walls():
-    cfg = DEFAULT_TICKERS["SPY"]
-    walls_empty = {
-        "call_wall": None,
-        "put_wall": None,
-        "top_pos_clusters": [],
-        "top_neg_clusters": [],
-        "top_oi_clusters": [],
-        "total_net_gex": 0.0,
-    }
-    out = build_ticker_payload(
-        status="ok",
-        spot=100.0,
-        cfg=cfg,
-        multiplier=1.0,
-        basis_carry=0.0,
-        walls=walls_empty,
-        flip=None,
-        contract_count=0,
-        expiries_included=[],
-        warnings=[],
-    )
-    assert out["call_wall"] is None
-    assert out["put_wall"] is None
-    assert out["gamma_flip"] is None
-    assert out["top_pos_clusters"] == []
+    base.update(overrides)
+    return base
 
 
 # ---------------------------------------------------------------------------
-# build_payload
+# Schema shape
+# ---------------------------------------------------------------------------
+
+def test_ticker_payload_v2_top_level_keys():
+    out = build_ticker_payload(**_common_kwargs())
+    expected = {
+        "status", "spot", "dividend_yield", "futures_symbol", "underlying_kind",
+        "multiplier", "spot_futures_equiv", "basis_carry",
+        "blended", "dte0", "expected_move_1d",
+        "contract_count", "dte0_contract_count", "expiries_included", "warnings",
+    }
+    assert set(out.keys()) == expected
+    assert out["status"] == "ok"
+    assert out["underlying_kind"] == "index"   # SPX scale_to_index == 1.0
+    assert out["futures_symbol"] == "ES"
+
+
+def test_blended_section_mapped():
+    out = build_ticker_payload(**_common_kwargs())
+    bl = out["blended"]
+    assert bl["call_wall"]["etf_strike"] == 7500.0
+    assert bl["put_wall"]["etf_strike"] == 7000.0
+    assert bl["gamma_flip"]["etf_strike"] == 7445.0
+    # multiplier mapping present
+    assert bl["call_wall"]["futures_mult"] == pytest.approx(7500.0 * 1.0087)
+    # blended carries OI clusters
+    assert "top_oi_clusters" in bl
+    assert len(bl["top_oi_clusters"]) == 1
+
+
+def test_dte0_section_mapped_and_aliased():
+    out = build_ticker_payload(**_common_kwargs())
+    d0 = out["dte0"]
+    assert d0 is not None
+    assert d0["call_wall"]["etf_strike"] == 7380.0
+    assert d0["put_wall"]["etf_strike"] == 7325.0
+    assert d0["gamma_flip"]["etf_strike"] == 7350.0
+    # MenthorQ-style aliases
+    assert d0["call_resistance_0dte"]["etf_strike"] == 7380.0
+    assert d0["put_support_0dte"]["etf_strike"] == 7325.0
+    assert d0["hvl_0dte"]["etf_strike"] == 7350.0
+    # gamma wall 0dte = larger |GEX| side; CW=2.69e9 > PW=1.60e9 → CW
+    assert d0["gamma_wall_0dte"]["etf_strike"] == 7380.0
+    # dte0 has NO oi clusters (we pass top_n_oi=0 upstream; output omits)
+    assert "top_oi_clusters" not in d0
+
+
+def test_dte0_none_when_no_same_day_expiry():
+    out = build_ticker_payload(**_common_kwargs(dte0_contract_count=0))
+    assert out["dte0"] is None
+
+
+def test_expected_move_block():
+    out = build_ticker_payload(**_common_kwargs())
+    em = out["expected_move_1d"]
+    assert em["move"] == 55.0
+    assert em["atm_iv"] == 0.12
+    assert em["high_etf"] == pytest.approx(7361.0 + 55.0)
+    assert em["low_etf"] == pytest.approx(7361.0 - 55.0)
+    assert em["high_futures_mult"] == pytest.approx((7361.0 + 55.0) * 1.0087)
+
+
+def test_expected_move_none_when_unavailable():
+    out = build_ticker_payload(**_common_kwargs(expected_move=None, atm_iv=None))
+    assert out["expected_move_1d"] is None
+
+
+def test_etf_underlying_kind():
+    """A non-index config (scale != 1.0) reports underlying_kind=etf."""
+    cfg = DEFAULT_TICKERS["IWM"]
+    out = build_ticker_payload(**_common_kwargs(cfg=cfg, spot=298.0))
+    assert out["underlying_kind"] == "etf"
+
+
+def test_error_variant():
+    out = build_ticker_payload(**_common_kwargs(status="error", spot=None,
+                                                warnings=["fetch failed"]))
+    assert out == {"status": "error", "warnings": ["fetch failed"]}
+
+
+# ---------------------------------------------------------------------------
+# build_payload envelope
 # ---------------------------------------------------------------------------
 
 def test_build_payload_envelope():
-    ts = datetime(2026, 5, 23, 14, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 6, 24, 13, 40, tzinfo=timezone.utc)
     pay = build_payload(
-        per_ticker_results={
-            "SPY": {"status": "ok", "spot": 583.42},
-            "QQQ": {"status": "error", "warnings": ["..."]},
-        },
-        risk_free_rate=0.043,
-        fetch_run_id="20260523-1400",
-        generated_at_utc=ts,
+        {"SPX": {"status": "ok"}, "NDX": {"status": "error", "warnings": []}},
+        risk_free_rate=0.043, fetch_run_id="20260624-1340", generated_at_utc=ts,
     )
     assert pay["schema_version"] == SCHEMA_VERSION
-    assert pay["generated_at"] == "2026-05-23T14:00:00Z"
-    assert pay["generator"].startswith("FFGEXFetcher")
-    assert pay["fetch_run_id"] == "20260523-1400"
+    assert pay["schema_version"] == 2
+    assert pay["generated_at"] == "2026-06-24T13:40:00Z"
+    assert pay["fetch_run_id"] == "20260624-1340"
     assert pay["macro"]["risk_free_rate"] == 0.043
-    assert "SPY" in pay["tickers"]
-    assert "QQQ" in pay["tickers"]
+    assert "SPX" in pay["tickers"] and "NDX" in pay["tickers"]
 
 
-def test_build_payload_serializable():
-    """The full payload must be JSON-serializable — no numpy types leaking."""
-    pay = build_payload(
-        per_ticker_results={"SPY": {"status": "ok", "spot": 583.42}},
-        risk_free_rate=0.043,
-        fetch_run_id="20260523-1400",
-    )
-    s = json.dumps(pay)
-    assert len(s) > 100
+def test_payload_json_serializable():
+    out = build_ticker_payload(**_common_kwargs())
+    pay = build_payload({"SPX": out}, risk_free_rate=0.043, fetch_run_id="x")
+    blob = json.dumps(pay)
+    assert len(blob) > 500
+    back = json.loads(blob)
+    assert back["tickers"]["SPX"]["dte0"]["call_wall"]["etf_strike"] == 7380.0
 
 
 # ---------------------------------------------------------------------------
 # post_to_worker — mocked
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_post_to_worker_success():
-    """Mock AsyncClient.post → 200 → success."""
-    payload = {"schema_version": 1, "tickers": {}}
+    payload = {"schema_version": 2, "tickers": {}}
     with patch("ffgex_fetcher.output.httpx.AsyncClient") as MockClient:
         mock = AsyncMock()
         mock.post = AsyncMock(return_value=httpx.Response(200, content=b'{"ok":true}'))
         MockClient.return_value.__aenter__.return_value = mock
-
-        await post_to_worker(
-            payload, worker_url="https://gex.workers.dev", worker_secret="hunter2",
-        )
+        await post_to_worker(payload, worker_url="https://x.workers.dev", worker_secret="s")
         mock.post.assert_called_once()
-        called_url = mock.post.call_args.args[0]
-        called_headers = mock.post.call_args.kwargs["headers"]
-        assert called_url == "https://gex.workers.dev/update"
-        assert called_headers["X-Auth"] == "hunter2"
+        assert mock.post.call_args.args[0] == "https://x.workers.dev/update"
+        assert mock.post.call_args.kwargs["headers"]["X-Auth"] == "s"
 
 
-@pytest.mark.asyncio
 async def test_post_to_worker_retries_on_5xx():
-    """5xx should trigger retry, then succeed if a later attempt returns 200."""
-    payload = {"schema_version": 1, "tickers": {}}
+    payload = {"schema_version": 2, "tickers": {}}
     with patch("ffgex_fetcher.output.httpx.AsyncClient") as MockClient:
         mock = AsyncMock()
-        # First two calls return 503, third returns 200.
         mock.post = AsyncMock(side_effect=[
-            httpx.Response(503, content=b"unavailable"),
-            httpx.Response(503, content=b"unavailable"),
+            httpx.Response(503, content=b"x"),
+            httpx.Response(503, content=b"x"),
             httpx.Response(200, content=b'{"ok":true}'),
         ])
         MockClient.return_value.__aenter__.return_value = mock
-
-        # Use no sleep delay for fast test
         with patch("ffgex_fetcher.output.asyncio.sleep", new=AsyncMock()):
-            await post_to_worker(
-                payload, worker_url="https://gex.workers.dev",
-                worker_secret="hunter2", retries=3,
-            )
+            await post_to_worker(payload, worker_url="https://x.workers.dev",
+                                 worker_secret="s", retries=3)
         assert mock.post.call_count == 3
 
 
-@pytest.mark.asyncio
 async def test_post_to_worker_fails_after_retries():
-    payload = {"schema_version": 1, "tickers": {}}
+    payload = {"schema_version": 2, "tickers": {}}
     with patch("ffgex_fetcher.output.httpx.AsyncClient") as MockClient:
         mock = AsyncMock()
-        mock.post = AsyncMock(return_value=httpx.Response(503, content=b"unavail"))
+        mock.post = AsyncMock(return_value=httpx.Response(503, content=b"x"))
         MockClient.return_value.__aenter__.return_value = mock
-
         with patch("ffgex_fetcher.output.asyncio.sleep", new=AsyncMock()):
             with pytest.raises(RuntimeError, match="failed after"):
-                await post_to_worker(
-                    payload, worker_url="https://gex.workers.dev",
-                    worker_secret="x", retries=2,
-                )
+                await post_to_worker(payload, worker_url="https://x.workers.dev",
+                                     worker_secret="s", retries=2)
 
 
-@pytest.mark.asyncio
 async def test_post_to_worker_no_retry_on_4xx():
-    payload = {"schema_version": 1, "tickers": {}}
+    payload = {"schema_version": 2, "tickers": {}}
     with patch("ffgex_fetcher.output.httpx.AsyncClient") as MockClient:
         mock = AsyncMock()
-        mock.post = AsyncMock(return_value=httpx.Response(401, content=b"unauthorized"))
+        mock.post = AsyncMock(return_value=httpx.Response(401, content=b"unauth"))
         MockClient.return_value.__aenter__.return_value = mock
-
         with pytest.raises(RuntimeError, match="non-retryable"):
-            await post_to_worker(
-                payload, worker_url="https://gex.workers.dev",
-                worker_secret="bad-secret",
-            )
-        # Should have been called exactly once (no retry).
+            await post_to_worker(payload, worker_url="https://x.workers.dev",
+                                 worker_secret="bad")
         assert mock.post.call_count == 1
