@@ -1,12 +1,15 @@
 // Standalone validation of the parsing logic from FFGEXLevels.cs.
-// Re-implements ParseSnapshot using System.Text.Json (built-in) instead of
-// Newtonsoft.Json (NT8-bundled). The parsing LOGIC is what we're validating;
-// the JSON library is interchangeable.
+// Mirrors ParseSnapshot EXACTLY, including the dependency-free MiniJson parser
+// the indicator uses (NinjaScript has no Newtonsoft.Json reference by default,
+// so the indicator hand-rolls a tiny JSON parser using only core BCL types).
+// Written in conservative C# (no pattern-matching / out-var) so this file and
+// the NinjaScript file share identical logic.
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
-using System.Text.Json;
+using System.Text;
 
 public enum FFGEXMappingMode { DynamicMultiplier, CarryBasis, RawETFStrike }
 
@@ -47,130 +50,246 @@ public static class Parser
 {
     public static Snapshot Parse(string json, FFGEXMappingMode mode)
     {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
         var s = new Snapshot();
-        if (root.TryGetProperty("ticker", out var t)) s.Ticker = t.GetString() ?? "";
-        if (root.TryGetProperty("status", out var st)) s.Status = st.GetString() ?? "";
-        if (root.TryGetProperty("generated_at", out var ga))
-            s.GeneratedAtUtc = ParseUtc(ga.GetString());
-        if (root.TryGetProperty("spot", out var sp) && sp.ValueKind != JsonValueKind.Null)
-            s.Spot = sp.GetDouble();
-        if (root.TryGetProperty("multiplier", out var mu) && mu.ValueKind != JsonValueKind.Null)
-            s.Multiplier = mu.GetDouble();
-        if (root.TryGetProperty("contract_count", out var cc) && cc.ValueKind != JsonValueKind.Null)
-            s.ContractCount = cc.GetInt32();
-        if (root.TryGetProperty("warnings", out var ws) && ws.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var w in ws.EnumerateArray())
-                s.Warnings.Add(w.GetString() ?? "");
-        }
+        var root = MiniJson.Parse(json) as Dictionary<string, object>;
+        if (root == null) return s;
+
+        s.Ticker = Str(Get(root, "ticker")) ?? "";
+        s.Status = Str(Get(root, "status")) ?? "";
+        s.GeneratedAtUtc = ParseUtc(Str(Get(root, "generated_at")));
+        double? spot = Num(Get(root, "spot"));
+        if (spot.HasValue) s.Spot = spot.Value;
+        double? mult = Num(Get(root, "multiplier"));
+        if (mult.HasValue) s.Multiplier = mult.Value;
+        double? cc = Num(Get(root, "contract_count"));
+        if (cc.HasValue) s.ContractCount = (int)cc.Value;
+        List<object> warns = Arr(Get(root, "warnings"));
+        if (warns != null)
+            foreach (var w in warns) { string ws = Str(w); if (ws != null) s.Warnings.Add(ws); }
 
         if (s.Status != "ok") return s;
 
         // v2 nests the structural levels under "blended"; v1 had them at root.
-        // Fall back to root so cached v1 payloads still parse.
-        JsonElement levels = root;
-        if (root.TryGetProperty("blended", out var bl) && bl.ValueKind == JsonValueKind.Object)
-            levels = bl;
+        object blended = Get(root, "blended");
+        object levels = IsObj(blended) ? blended : root;
 
-        if (levels.TryGetProperty("gamma_flip", out var gf) && gf.ValueKind != JsonValueKind.Null)
-            s.Flip = MapPrice(gf, mode);
-
-        if (levels.TryGetProperty("call_wall", out var cw) && cw.ValueKind != JsonValueKind.Null)
-            s.CallWall = NodeToLevel(cw, mode, isOI: false);
-
-        if (levels.TryGetProperty("put_wall", out var pw) && pw.ValueKind != JsonValueKind.Null)
-            s.PutWall = NodeToLevel(pw, mode, isOI: false);
-
-        AppendClusters(levels, "top_pos_clusters", s.PosClusters, mode, false);
-        AppendClusters(levels, "top_neg_clusters", s.NegClusters, mode, false);
-        AppendClusters(levels, "top_oi_clusters", s.OIClusters, mode, true);
+        double? flip = MapPrice(Get(levels, "gamma_flip"), mode);
+        if (flip.HasValue) s.Flip = flip;
+        s.CallWall = NodeToLevel(Get(levels, "call_wall"), mode, false);
+        s.PutWall = NodeToLevel(Get(levels, "put_wall"), mode, false);
+        AppendClusters(Arr(Get(levels, "top_pos_clusters")), s.PosClusters, mode, false);
+        AppendClusters(Arr(Get(levels, "top_neg_clusters")), s.NegClusters, mode, false);
+        AppendClusters(Arr(Get(levels, "top_oi_clusters")), s.OIClusters, mode, true);
 
         // v2 0DTE block (null when no same-day expiry; sides may be null)
-        if (root.TryGetProperty("dte0", out var dte0) && dte0.ValueKind == JsonValueKind.Object)
+        object dte0 = Get(root, "dte0");
+        if (IsObj(dte0))
         {
-            s.Dte0CallRes   = SubLevel(dte0, "call_resistance_0dte", mode);
-            s.Dte0PutSup    = SubLevel(dte0, "put_support_0dte", mode);
-            s.Dte0Hvl       = SubLevel(dte0, "hvl_0dte", mode);
-            s.Dte0GammaWall = SubLevel(dte0, "gamma_wall_0dte", mode);
+            s.Dte0CallRes = NodeToLevel(Get(dte0, "call_resistance_0dte"), mode, false);
+            s.Dte0PutSup = NodeToLevel(Get(dte0, "put_support_0dte"), mode, false);
+            s.Dte0Hvl = NodeToLevel(Get(dte0, "hvl_0dte"), mode, false);
+            s.Dte0GammaWall = NodeToLevel(Get(dte0, "gamma_wall_0dte"), mode, false);
         }
 
         // v2 1-day expected-move band
-        if (root.TryGetProperty("expected_move_1d", out var em) && em.ValueKind == JsonValueKind.Object)
+        object em = Get(root, "expected_move_1d");
+        if (IsObj(em))
         {
-            s.ExpMoveHigh = MapMovePrice(em, mode, high: true);
-            s.ExpMoveLow  = MapMovePrice(em, mode, high: false);
+            s.ExpMoveHigh = MapMovePrice(em, mode, true);
+            s.ExpMoveLow = MapMovePrice(em, mode, false);
         }
 
         return s;
     }
 
-    static Snapshot.Level SubLevel(JsonElement parent, string key, FFGEXMappingMode mode)
-    {
-        if (!parent.TryGetProperty(key, out var node) || node.ValueKind == JsonValueKind.Null)
-            return null;
-        return NodeToLevel(node, mode, isOI: false);
-    }
-
-    static double? MapMovePrice(JsonElement em, FFGEXMappingMode mode, bool high)
-    {
-        string key = mode == FFGEXMappingMode.RawETFStrike
-            ? (high ? "high_etf" : "low_etf")
-            : (high ? "high_futures_mult" : "low_futures_mult");
-        if (!em.TryGetProperty(key, out var tok) || tok.ValueKind == JsonValueKind.Null)
-            return null;
-        return tok.GetDouble();
-    }
-
-    static void AppendClusters(JsonElement root, string key, List<Snapshot.Level> sink,
+    static void AppendClusters(List<object> arr, List<Snapshot.Level> sink,
         FFGEXMappingMode mode, bool isOI)
     {
-        if (!root.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return;
-        foreach (var item in arr.EnumerateArray())
+        if (arr == null) return;
+        foreach (var item in arr)
         {
             var lvl = NodeToLevel(item, mode, isOI);
             if (lvl != null) sink.Add(lvl);
         }
     }
 
-    static Snapshot.Level NodeToLevel(JsonElement node, FFGEXMappingMode mode, bool isOI)
+    static Snapshot.Level NodeToLevel(object node, FFGEXMappingMode mode, bool isOI)
     {
         double? p = MapPrice(node, mode);
         if (!p.HasValue) return null;
-        var lvl = new Snapshot.Level
+        return new Snapshot.Level
         {
             Price = p.Value,
-            EtfStrike = node.TryGetProperty("etf_strike", out var es) ? es.GetDouble() : 0,
+            EtfStrike = Num(Get(node, "etf_strike")) ?? 0,
             IsOI = isOI,
             Magnitude = isOI
-                ? Math.Abs(node.TryGetProperty("open_interest", out var oi) ? oi.GetDouble() : 0)
-                : Math.Abs(node.TryGetProperty("gex_dollars", out var gd) ? gd.GetDouble() : 0),
+                ? Math.Abs(Num(Get(node, "open_interest")) ?? 0)
+                : Math.Abs(Num(Get(node, "gex_dollars")) ?? 0),
         };
-        return lvl;
     }
 
-    static double? MapPrice(JsonElement node, FFGEXMappingMode mode)
+    static double? MapPrice(object node, FFGEXMappingMode mode)
     {
-        string key = mode switch
-        {
-            FFGEXMappingMode.DynamicMultiplier => "futures_mult",
-            FFGEXMappingMode.CarryBasis => "futures_basis",
-            FFGEXMappingMode.RawETFStrike => "etf_strike",
-            _ => "futures_mult",
-        };
-        if (!node.TryGetProperty(key, out var tok) || tok.ValueKind == JsonValueKind.Null)
-            return null;
-        return tok.GetDouble();
+        if (node == null) return null;
+        string key = mode == FFGEXMappingMode.DynamicMultiplier ? "futures_mult"
+                   : mode == FFGEXMappingMode.CarryBasis ? "futures_basis"
+                   : "etf_strike";
+        return Num(Get(node, key));
     }
+
+    static double? MapMovePrice(object em, FFGEXMappingMode mode, bool high)
+    {
+        string key = mode == FFGEXMappingMode.RawETFStrike
+            ? (high ? "high_etf" : "low_etf")
+            : (high ? "high_futures_mult" : "low_futures_mult");
+        return Num(Get(em, key));
+    }
+
+    // ---- object-model accessors over MiniJson output ----
+    static object Get(object node, string key)
+    {
+        var d = node as Dictionary<string, object>;
+        object v;
+        return (d != null && d.TryGetValue(key, out v)) ? v : null;
+    }
+    static string Str(object node) { return node as string; }
+    static double? Num(object node) { if (node is double) return (double)node; return null; }
+    static List<object> Arr(object node) { return node as List<object>; }
+    static bool IsObj(object node) { return node is Dictionary<string, object>; }
 
     static DateTime ParseUtc(string iso)
     {
         if (string.IsNullOrEmpty(iso)) return DateTime.MinValue;
-        return DateTime.TryParse(iso, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
-            out var d) ? d.ToUniversalTime() : DateTime.MinValue;
+        DateTime d;
+        return DateTime.TryParse(iso, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out d)
+            ? d.ToUniversalTime() : DateTime.MinValue;
+    }
+}
+
+// Minimal dependency-free JSON parser. Objects -> Dictionary<string,object>,
+// arrays -> List<object>, numbers -> double, plus string / bool / null.
+// Uses only System.Collections.Generic, System.Text, System.Globalization.
+internal static class MiniJson
+{
+    public static object Parse(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return null;
+        int i = 0;
+        return ParseValue(s, ref i);
+    }
+
+    static object ParseValue(string s, ref int i)
+    {
+        SkipWs(s, ref i);
+        if (i >= s.Length) return null;
+        char c = s[i];
+        if (c == '{') return ParseObject(s, ref i);
+        if (c == '[') return ParseArray(s, ref i);
+        if (c == '"') return ParseString(s, ref i);
+        if (c == 't') { i += 4; return true; }
+        if (c == 'f') { i += 5; return false; }
+        if (c == 'n') { i += 4; return null; }
+        return ParseNumber(s, ref i);
+    }
+
+    static Dictionary<string, object> ParseObject(string s, ref int i)
+    {
+        var d = new Dictionary<string, object>();
+        i++; // {
+        SkipWs(s, ref i);
+        if (i < s.Length && s[i] == '}') { i++; return d; }
+        while (i < s.Length)
+        {
+            SkipWs(s, ref i);
+            string key = ParseString(s, ref i);
+            SkipWs(s, ref i);
+            if (i < s.Length && s[i] == ':') i++;
+            object val = ParseValue(s, ref i);
+            d[key] = val;
+            SkipWs(s, ref i);
+            if (i < s.Length && s[i] == ',') { i++; continue; }
+            if (i < s.Length && s[i] == '}') { i++; break; }
+            break;
+        }
+        return d;
+    }
+
+    static List<object> ParseArray(string s, ref int i)
+    {
+        var list = new List<object>();
+        i++; // [
+        SkipWs(s, ref i);
+        if (i < s.Length && s[i] == ']') { i++; return list; }
+        while (i < s.Length)
+        {
+            object val = ParseValue(s, ref i);
+            list.Add(val);
+            SkipWs(s, ref i);
+            if (i < s.Length && s[i] == ',') { i++; continue; }
+            if (i < s.Length && s[i] == ']') { i++; break; }
+            break;
+        }
+        return list;
+    }
+
+    static string ParseString(string s, ref int i)
+    {
+        var sb = new StringBuilder();
+        i++; // opening quote
+        while (i < s.Length)
+        {
+            char c = s[i++];
+            if (c == '"') break;
+            if (c == '\\' && i < s.Length)
+            {
+                char e = s[i++];
+                if (e == '"') sb.Append('"');
+                else if (e == '\\') sb.Append('\\');
+                else if (e == '/') sb.Append('/');
+                else if (e == 'b') sb.Append('\b');
+                else if (e == 'f') sb.Append('\f');
+                else if (e == 'n') sb.Append('\n');
+                else if (e == 'r') sb.Append('\r');
+                else if (e == 't') sb.Append('\t');
+                else if (e == 'u' && i + 4 <= s.Length)
+                {
+                    int code = int.Parse(s.Substring(i, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                    sb.Append((char)code);
+                    i += 4;
+                }
+                else sb.Append(e);
+            }
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    static object ParseNumber(string s, ref int i)
+    {
+        int start = i;
+        while (i < s.Length)
+        {
+            char c = s[i];
+            if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E')
+                i++;
+            else break;
+        }
+        string num = s.Substring(start, i - start);
+        double d;
+        if (double.TryParse(num, NumberStyles.Float, CultureInfo.InvariantCulture, out d))
+            return d;
+        return null;
+    }
+
+    static void SkipWs(string s, ref int i)
+    {
+        while (i < s.Length)
+        {
+            char c = s[i];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') i++;
+            else break;
+        }
     }
 }
 

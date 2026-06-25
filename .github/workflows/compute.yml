@@ -1,20 +1,22 @@
 name: Compute GEX
 
 on:
-  # Schedule is UTC. US equity options trade 09:30-16:00 ET.
-  # We run a post-open snapshot first (0DTE focus), then midday and pre-close.
+  # Schedule is UTC. US equity/index options trade 09:30-16:00 ET.
+  # We run a post-open snapshot first, then midday and pre-close.
   # Because GitHub cron is UTC and does not track DST, each ET target is listed
   # twice: once for EDT (summer, UTC-4) and once for EST (winter, UTC-5).
-  # The workflow self-guards against running on the wrong offset using a date
-  # check in the first step, so the duplicate crons don't double-fire.
+  # The "Guard against wrong DST offset" step skips whichever pair belongs to the
+  # INACTIVE offset. That guard keys off github.event.schedule (the cron string
+  # that fired) -- NOT the execution clock -- so GitHub's cron drift (commonly
+  # 5-40 min) cannot push a run across an hour boundary and cause a false skip.
   schedule:
-    # ---- Post-open (~9:40 ET, shortly after open so 0DTE data is populated) ----
-    - cron: '40 13 * * 1-5'   # 09:40 ET during EDT (summer)
-    - cron: '40 14 * * 1-5'   # 09:40 ET during EST (winter)
-    # ---- Midday (~12:00 ET) ----
+    # ---- Post-open (09:32 ET) ----
+    - cron: '32 13 * * 1-5'   # 09:32 ET during EDT (summer)
+    - cron: '32 14 * * 1-5'   # 09:32 ET during EST (winter)
+    # ---- Midday (12:00 ET) ----
     - cron: '0 16 * * 1-5'    # 12:00 ET during EDT
     - cron: '0 17 * * 1-5'    # 12:00 ET during EST
-    # ---- Pre-close (~15:50 ET) ----
+    # ---- Pre-close (15:50 ET) ----
     - cron: '50 19 * * 1-5'   # 15:50 ET during EDT
     - cron: '50 20 * * 1-5'   # 15:50 ET during EST
 
@@ -49,34 +51,37 @@ jobs:
         id: dstguard
         shell: bash
         run: |
-          # Determine whether the US is currently observing EDT or EST.
-          # If 'America/New_York' offset is -04 it's EDT, -05 it's EST.
-          OFFSET=$(TZ=America/New_York date +%z)   # e.g. -0400 or -0500
-          HOUR_UTC=$(date -u +%H)
-          MIN_UTC=$(date -u +%M)
-          echo "ET offset: $OFFSET, now UTC: ${HOUR_UTC}:${MIN_UTC}"
-          # Map each run window. EDT crons are at UTC 13:40/16:00/19:50.
-          # EST crons are at UTC 14:40/17:00/20:50.
-          # If we're on EDT but this invocation matches an EST cron hour, skip.
+          # Skip the duplicate cron that belongs to the INACTIVE DST offset.
+          #
+          # Key the decision off the SCHEDULED cron (github.event.schedule) -- the
+          # cron string that actually fired -- NOT the execution wall-clock. GitHub
+          # cron drift (commonly 5-40 min, worst at the top of the hour) routinely
+          # pushes a run across an hour boundary; an execution-clock check would then
+          # wrongly skip legit runs (e.g. the 19:50 pre-close firing at 20:0x) and
+          # wrongly run the opposite-offset duplicates (e.g. the 20:50 EST cron at
+          # 21:1x). github.event.schedule is immune to that drift.
+          SCHED="${{ github.event.schedule }}"
+          EVENT="${{ github.event_name }}"
+          OFFSET=$(TZ=America/New_York date +%z)   # -0400 = EDT, -0500 = EST
+          echo "event=$EVENT schedule='$SCHED' ET offset=$OFFSET"
+
           SKIP=0
-          if [ "$OFFSET" = "-0400" ]; then
-            # EDT active: valid UTC hours are 13,16,19. Skip 14,17,20.
-            case "$HOUR_UTC" in
-              14|17|20) SKIP=1 ;;
+          # Only scheduled runs need de-duplication; workflow_dispatch always runs.
+          if [ "$EVENT" = "schedule" ]; then
+            CRON_HOUR=$(echo "$SCHED" | awk '{print $2}')   # UTC hour field of the firing cron
+            if [ "$OFFSET" = "-0400" ]; then
+              VALID="13 16 19"     # EDT crons: 09:32, 12:00, 15:50 ET
+            else
+              VALID="14 17 20"     # EST crons: 09:32, 12:00, 15:50 ET
+            fi
+            case " $VALID " in
+              *" $CRON_HOUR "*) SKIP=0 ;;
+              *) SKIP=1 ;;
             esac
-          elif [ "$OFFSET" = "-0500" ]; then
-            # EST active: valid UTC hours are 14,17,20. Skip 13,16,19.
-            case "$HOUR_UTC" in
-              13|16|19) SKIP=1 ;;
-            esac
-          fi
-          # workflow_dispatch (manual) always runs.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SKIP=0
           fi
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
           if [ "$SKIP" = "1" ]; then
-            echo "Skipping: this cron is for the other DST offset."
+            echo "Skipping: cron '$SCHED' belongs to the inactive DST offset ($OFFSET active)."
           fi
 
       - name: Setup Python
