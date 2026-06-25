@@ -1,0 +1,256 @@
+{
+  "generated_at": "2026-05-23T14:00:00Z",
+  "schema_version": 2,
+  "ticker": "SPY",
+  "status": "ok",
+  "spot": 583.42,
+  "dividend_yield": 0.0125,
+  "futures_symbol": "ES",
+  "underlying_kind": "etf",
+  "multiplier": 9.941380137808098,
+  "spot_futures_equiv": 5800.0,
+  "basis_carry": 21.979488962561163,
+  "blended": {
+    "gamma_flip": {
+      "etf_strike": 582.1482954882972,
+      "futures_mult": 5787.357502026198,
+      "futures_basis": 5843.462443845533
+    },
+    "call_wall": {
+      "etf_strike": 590.0,
+      "futures_mult": 5865.414281306777,
+      "futures_basis": 5921.979488962561,
+      "gex_dollars": 2692994740.4894166
+    },
+    "put_wall": {
+      "etf_strike": 575.0,
+      "futures_mult": 5716.2935792396565,
+      "futures_basis": 5771.979488962561,
+      "gex_dollars": -1599979833.0226839
+    },
+    "top_pos_clusters": [
+      {
+        "etf_strike": 584.0,
+        "futures_mult": 5805.766000479929,
+        "futures_basis": 5861.979488962561,
+        "gex_dollars": 32942191.588265955
+      },
+      {
+        "etf_strike": 582.0,
+        "futures_mult": 5785.883240204313,
+        "futures_basis": 5841.979488962561,
+        "gex_dollars": 25684895.842874274
+      },
+      {
+        "etf_strike": 595.0,
+        "futures_mult": 5915.121181995818,
+        "futures_basis": 5971.979488962561,
+        "gex_dollars": 14290591.862993728
+      },
+      {
+        "etf_strike": 594.0,
+        "futures_mult": 5905.17980185801,
+        "futures_basis": 5961.979488962561,
+        "gex_dollars": 10965236.52172051
+      },
+      {
+        "etf_strike": 581.0,
+        "futures_mult": 5775.941860066505,
+        "futures_basis": 5831.979488962561,
+        "gex_dollars": 7475774.529692709
+      }
+    ],
+    "top_neg_clusters": [
+      {
+        "etf_strike": 585.0,
+        "futures_mult": 5815.707380617738,
+        "futures_basis": 5871.979488962561,
+        "gex_dollars": -18385849.511487
+      },
+      {
+        "etf_strike": 578.0,
+        "futures_mult": 5746.117719653081,
+        "futures_basis": 5801.979488962561,
+        "gex_dollars": -15261269.16209966
+      },
+      {
+        "etf_strike": 576.0,
+        "futures_mult": 5726.234959377464,
+        "futures_basis": 5781.979488962561,
+        "gex_dollars": -15210097.24897019
+      },
+      {
+        "etf_strike": 572.0,
+        "futures_mult": 5686.469438826232,
+        "futures_basis": 5741.979488962561,
+        "gex_dollars": -13968170.94416141
+      },
+      {
+        "etf_strike": 574.0,
+        "futures_mult": 5706.352199101848,
+        "futures_basis": 5761.979488962561,
+        "gex_dollars": -13368586.145920528
+      }
+    ],
+    "total_net_gex": 1064665892.0328655,
+    "top_oi_clusters": [
+      {
+        "etf_strike": 590.0,
+        "futures_mult": 5865.414281306777,
+        "futures_basis": 5921.979488962561,
+        "open_interest": 473057
+      },
+      {
+        "etf_strike": 575.0,
+        "futures_mult": 5716.2935792396565,
+        "futures_basis": 5771.979488962561,
+        "open_interest": 435619
+      },
+      {
+        "etf_strike": 585.0,
+        "futures_mult": 5815.707380617738,
+        "futures_basis": 5871.979488962561,
+        "open_interest": 203374
+      },
+      {
+        "etf_strike": 580.0,
+        "futures_mult": 5766.000479928697,
+        "futures_basis": 5821.979488962561,
+        "open_interest": 185583
+      },
+      {
+        "etf_strike": 583.0,
+        "futures_mult": 5795.824620342121,
+        "futures_basis": 5851.979488962561,
+        "open_interest": 143317
+      }
+    ]
+  },
+  "dte0": {
+    "gamma_flip": {
+      "etf_strike": 582.2293415114514,
+      "futures_mult": 5788.16321135103,
+      "futures_basis": 5844.272904077075
+    },
+    "call_wall": {
+      "etf_strike": 590.0,
+      "futures_mult": 5865.414281306777,
+      "futures_basis": 5921.979488962561,
+      "gex_dollars": 214058120.23958176
+    },
+    "put_wall": {
+      "etf_strike": 575.0,
+      "futures_mult": 5716.2935792396565,
+      "futures_basis": 5771.979488962561,
+      "gex_dollars": -38145881.711887896
+    },
+    "top_pos_clusters": [
+      {
+        "etf_strike": 585.0,
+        "futures_mult": 5815.707380617738,
+        "futures_basis": 5871.979488962561,
+        "gex_dollars": 31715028.442814708
+      },
+      {
+        "etf_strike": 584.0,
+        "futures_mult": 5805.766000479929,
+        "futures_basis": 5861.979488962561,
+        "gex_dollars": 11674215.446723938
+      },
+      {
+        "etf_strike": 582.0,
+        "futures_mult": 5785.883240204313,
+        "futures_basis": 5841.979488962561,
+        "gex_dollars": 10670797.558688045
+      },
+      {
+        "etf_strike": 581.0,
+        "futures_mult": 5775.941860066505,
+        "futures_basis": 5831.979488962561,
+        "gex_dollars": 7596916.4689823985
+      },
+      {
+        "etf_strike": 589.0,
+        "futures_mult": 5855.47290116897,
+        "futures_basis": 5911.979488962561,
+        "gex_dollars": 6303308.712899908
+      }
+    ],
+    "top_neg_clusters": [
+      {
+        "etf_strike": 578.0,
+        "futures_mult": 5746.117719653081,
+        "futures_basis": 5801.979488962561,
+        "gex_dollars": -17595027.818299368
+      },
+      {
+        "etf_strike": 577.0,
+        "futures_mult": 5736.176339515273,
+        "futures_basis": 5791.979488962561,
+        "gex_dollars": -6374807.694466092
+      },
+      {
+        "etf_strike": 579.0,
+        "futures_mult": 5756.0590997908885,
+        "futures_basis": 5811.979488962561,
+        "gex_dollars": -6293146.290992379
+      },
+      {
+        "etf_strike": 580.0,
+        "futures_mult": 5766.000479928697,
+        "futures_basis": 5821.979488962561,
+        "gex_dollars": -4924241.6403644085
+      },
+      {
+        "etf_strike": 586.0,
+        "futures_mult": 5825.6487607555455,
+        "futures_basis": 5881.979488962561,
+        "gex_dollars": -4138005.2320319414
+      }
+    ],
+    "total_net_gex": 206722305.8910584,
+    "call_resistance_0dte": {
+      "etf_strike": 590.0,
+      "futures_mult": 5865.414281306777,
+      "futures_basis": 5921.979488962561,
+      "gex_dollars": 214058120.23958176
+    },
+    "put_support_0dte": {
+      "etf_strike": 575.0,
+      "futures_mult": 5716.2935792396565,
+      "futures_basis": 5771.979488962561,
+      "gex_dollars": -38145881.711887896
+    },
+    "hvl_0dte": {
+      "etf_strike": 582.2293415114514,
+      "futures_mult": 5788.16321135103,
+      "futures_basis": 5844.272904077075
+    },
+    "gamma_wall_0dte": {
+      "etf_strike": 590.0,
+      "futures_mult": 5865.414281306777,
+      "futures_basis": 5921.979488962561,
+      "gex_dollars": 214058120.23958176
+    }
+  },
+  "expected_move_1d": {
+    "move": 4.527847074377156,
+    "atm_iv": 0.1232,
+    "high_etf": 587.9478470743771,
+    "low_etf": 578.8921529256228,
+    "high_futures_mult": 5845.013048972246,
+    "low_futures_mult": 5754.986951027754
+  },
+  "contract_count": 714,
+  "dte0_contract_count": 102,
+  "expiries_included": [
+    "2026-05-23",
+    "2026-05-24",
+    "2026-05-25",
+    "2026-05-30",
+    "2026-06-06",
+    "2026-06-13",
+    "2026-06-20"
+  ],
+  "warnings": []
+}

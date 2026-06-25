@@ -1,0 +1,15 @@
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\bin\Debug\net8.0\FFGEXParseTest.exe
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\bin\Debug\net8.0\FFGEXParseTest.deps.json
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\bin\Debug\net8.0\FFGEXParseTest.runtimeconfig.json
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\bin\Debug\net8.0\FFGEXParseTest.dll
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\bin\Debug\net8.0\FFGEXParseTest.pdb
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.AssemblyInfoInputs.cache
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.AssemblyInfo.cs
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.csproj.CoreCompileInputs.cache
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.sourcelink.json
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.dll
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\refint\FFGEXParseTest.dll
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.pdb
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\FFGEXParseTest.genruntimeconfig.cache
+C:\Users\efire\OneDrive\Documents\Github\GexFetcher\docs\csharp-parse-test\FFGEXParseTest\obj\Debug\net8.0\ref\FFGEXParseTest.dll
