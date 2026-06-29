@@ -23,16 +23,14 @@ id = "d8cee0576bf94c908a621a0949be09d3"
 #                       Set with:  wrangler secret put GH_DISPATCH_TOKEN
 
 # Cloudflare Cron Triggers — punctual, unlike GitHub's best-effort `schedule:`
-# (which was firing 1-2h late). The scheduled() handler dispatches the GitHub
-# compute workflow at these times. Cron is UTC/DST-unaware, so each ET slot is
-# listed twice (EDT + EST); the handler skips whichever belongs to the inactive
-# offset (same rule as the workflow's own DST guard).
+# (which was firing 1-2h late). Cron is UTC/DST-unaware, so each ET slot needs
+# both its EDT and EST UTC hour. We pack both hours into ONE cron's hour field
+# (e.g. "13,14") so this is 3 triggers, not 6 — Workers Free caps crons at 5 per
+# ACCOUNT. The scheduled() handler dispatches only on the fire whose ET wall-clock
+# lands on a target slot; the off-season fire (wrong hour in ET) is skipped.
 [triggers]
 crons = [
-  "32 13 * * 1-5",  # 09:32 ET post-open  (EDT, UTC-4)
-  "32 14 * * 1-5",  # 09:32 ET post-open  (EST, UTC-5)
-  "0 16 * * 1-5",   # 12:00 ET midday     (EDT)
-  "0 17 * * 1-5",   # 12:00 ET midday     (EST)
-  "50 19 * * 1-5",  # 15:50 ET pre-close  (EDT)
-  "50 20 * * 1-5",  # 15:50 ET pre-close  (EST)
+  "32 13,14 * * 1-5",  # 09:32 ET post-open  (13:32 UTC EDT / 14:32 UTC EST)
+  "0 16,17 * * 1-5",   # 12:00 ET midday     (16:00 / 17:00 UTC)
+  "50 19,20 * * 1-5",  # 15:50 ET pre-close  (19:50 / 20:50 UTC)
 ]

@@ -69,18 +69,25 @@ const serverError = (msg) =>
 const GH_OWNER_REPO = "efirestone81/GexFetcher";
 const GH_WORKFLOW_FILE = "compute.yml";
 
-// Current US-Eastern UTC offset in hours: -4 (EDT) or -5 (EST).
-const etOffsetHours = (date) => {
-  const name =
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      timeZoneName: "shortOffset",
-    })
-      .formatToParts(date)
-      .find((p) => p.type === "timeZoneName")?.value || "GMT-5";
-  const m = name.match(/GMT([+-]\d+)/);
-  return m ? parseInt(m[1], 10) : -5;
+// ET wall-clock {hour, minute} for a Date (DST-aware via the IANA zone).
+const etHourMinute = (date) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (t) => parseInt(parts.find((p) => p.type === t)?.value ?? "-1", 10);
+  return { hour: get("hour"), minute: get("minute") };
 };
+
+// Target ET dispatch slots (post-open / midday / pre-close). Each cron carries
+// both UTC hours for the slot; only the fire landing on the slot's ET time runs.
+const ET_SLOTS = [
+  { hour: 9, minute: 32 },
+  { hour: 12, minute: 0 },
+  { hour: 15, minute: 50 },
+];
 
 const dispatchCompute = async (env) => {
   if (!env.GH_DISPATCH_TOKEN) {
@@ -239,16 +246,15 @@ export default {
   },
 
   // ---- Cloudflare Cron Trigger: fire the GitHub compute workflow on time ----
-  // event.cron is the cron string that fired (e.g. "32 13 * * 1-5"); we key the
-  // DST de-dup off it, not the wall clock, so a delayed fire can't misclassify.
+  // Each cron fires at two UTC hours (EDT + EST). Dispatch only when the fired
+  // time's ET wall-clock lands on a target slot, so the off-season fire is
+  // skipped. Keying off the actual scheduled time (not the cron string) handles
+  // DST correctly and works with the packed-hour crons.
   async scheduled(event, env, ctx) {
-    const cron = event.cron || "";
-    const cronHour = parseInt(cron.split(/\s+/)[1], 10);
-    const offset = etOffsetHours(new Date(event.scheduledTime));
-    // Valid UTC hours per active ET offset: EDT(-4)=13/16/19, EST(-5)=14/17/20.
-    const valid = offset === -4 ? [13, 16, 19] : [14, 17, 20];
-    if (!valid.includes(cronHour)) {
-      console.log(`scheduled: skip '${cron}' (inactive DST offset ${offset})`);
+    const { hour, minute } = etHourMinute(new Date(event.scheduledTime));
+    const onSlot = ET_SLOTS.some((s) => s.hour === hour && s.minute === minute);
+    if (!onSlot) {
+      console.log(`scheduled: ${hour}:${String(minute).padStart(2, "0")} ET not a slot; skip`);
       return;
     }
     ctx.waitUntil(dispatchCompute(env));
