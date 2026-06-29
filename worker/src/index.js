@@ -61,6 +61,51 @@ const serverError = (msg) =>
     headers: { "content-type": "text/plain" },
   });
 
+// ---- GitHub workflow_dispatch trigger (used by scheduled() below) ----
+// GitHub's own `schedule:` cron is best-effort and was firing 1-2h late.
+// Cloudflare Cron Triggers are punctual, so we dispatch the compute workflow
+// from here instead. Requires the GH_DISPATCH_TOKEN secret (fine-grained PAT
+// with Actions: Read and write on the repo).
+const GH_OWNER_REPO = "efirestone81/GexFetcher";
+const GH_WORKFLOW_FILE = "compute.yml";
+
+// Current US-Eastern UTC offset in hours: -4 (EDT) or -5 (EST).
+const etOffsetHours = (date) => {
+  const name =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      timeZoneName: "shortOffset",
+    })
+      .formatToParts(date)
+      .find((p) => p.type === "timeZoneName")?.value || "GMT-5";
+  const m = name.match(/GMT([+-]\d+)/);
+  return m ? parseInt(m[1], 10) : -5;
+};
+
+const dispatchCompute = async (env) => {
+  if (!env.GH_DISPATCH_TOKEN) {
+    console.log("scheduled: GH_DISPATCH_TOKEN not set; cannot dispatch");
+    return;
+  }
+  const url = `https://api.github.com/repos/${GH_OWNER_REPO}/actions/workflows/${GH_WORKFLOW_FILE}/dispatches`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.GH_DISPATCH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "ff-gex-worker-cron",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ ref: "main" }),
+  });
+  if (resp.status === 204) {
+    console.log("scheduled: dispatched compute.yml");
+  } else {
+    console.log(`scheduled: dispatch failed ${resp.status} ${await resp.text()}`);
+  }
+};
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -191,5 +236,21 @@ export default {
     } catch (err) {
       return serverError(`internal error: ${err.message || err}`);
     }
+  },
+
+  // ---- Cloudflare Cron Trigger: fire the GitHub compute workflow on time ----
+  // event.cron is the cron string that fired (e.g. "32 13 * * 1-5"); we key the
+  // DST de-dup off it, not the wall clock, so a delayed fire can't misclassify.
+  async scheduled(event, env, ctx) {
+    const cron = event.cron || "";
+    const cronHour = parseInt(cron.split(/\s+/)[1], 10);
+    const offset = etOffsetHours(new Date(event.scheduledTime));
+    // Valid UTC hours per active ET offset: EDT(-4)=13/16/19, EST(-5)=14/17/20.
+    const valid = offset === -4 ? [13, 16, 19] : [14, 17, 20];
+    if (!valid.includes(cronHour)) {
+      console.log(`scheduled: skip '${cron}' (inactive DST offset ${offset})`);
+      return;
+    }
+    ctx.waitUntil(dispatchCompute(env));
   },
 };

@@ -17,3 +17,22 @@ id = "d8cee0576bf94c908a621a0949be09d3"
 # Secrets (set via `wrangler secret put`):
 #   WORKER_SECRET — shared with GitHub Actions for POST /update
 #   READ_API_KEY  — shared with NinjaTrader indicator for GET /gex
+#   GH_DISPATCH_TOKEN — GitHub fine-grained PAT (repo efirestone81/GexFetcher,
+#                       permission Actions: Read and write). Used by scheduled()
+#                       to fire the compute workflow via workflow_dispatch.
+#                       Set with:  wrangler secret put GH_DISPATCH_TOKEN
+
+# Cloudflare Cron Triggers — punctual, unlike GitHub's best-effort `schedule:`
+# (which was firing 1-2h late). The scheduled() handler dispatches the GitHub
+# compute workflow at these times. Cron is UTC/DST-unaware, so each ET slot is
+# listed twice (EDT + EST); the handler skips whichever belongs to the inactive
+# offset (same rule as the workflow's own DST guard).
+[triggers]
+crons = [
+  "32 13 * * 1-5",  # 09:32 ET post-open  (EDT, UTC-4)
+  "32 14 * * 1-5",  # 09:32 ET post-open  (EST, UTC-5)
+  "0 16 * * 1-5",   # 12:00 ET midday     (EDT)
+  "0 17 * * 1-5",   # 12:00 ET midday     (EST)
+  "50 19 * * 1-5",  # 15:50 ET pre-close  (EDT)
+  "50 20 * * 1-5",  # 15:50 ET pre-close  (EST)
+]
